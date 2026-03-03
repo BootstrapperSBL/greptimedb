@@ -118,6 +118,7 @@ pub enum JsonVariant {
     String(String),
     Array(Vec<JsonVariant>),
     Object(BTreeMap<String, JsonVariant>),
+    Variant(Vec<u8>),
 }
 
 impl JsonVariant {
@@ -160,12 +161,19 @@ impl JsonVariant {
                 };
                 JsonNativeType::Array(Box::new(item_type))
             }
-            JsonVariant::Object(object) => JsonNativeType::Object(
-                object
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.native_type()))
-                    .collect(),
-            ),
+            JsonVariant::Object(object) => {
+                if object.is_empty() {
+                    JsonNativeType::Null
+                } else {
+                    JsonNativeType::Object(
+                        object
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.native_type()))
+                            .collect(),
+                    )
+                }
+            }
+            JsonVariant::Variant(_) => JsonNativeType::Variant,
         }
     }
 
@@ -192,6 +200,7 @@ impl JsonVariant {
                     .map(|(k, v)| (k.as_str(), v.as_ref()))
                     .collect(),
             ),
+            JsonVariant::Variant(v) => JsonVariantRef::Variant(v.as_slice()),
         }
     }
 }
@@ -290,6 +299,10 @@ impl Display for JsonVariant {
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
+            }
+            Self::Variant(v) => {
+                let v: serde_json::Value = serde_json::from_slice(v).unwrap();
+                write!(f, "{}", v)
             }
         }
     }
@@ -403,6 +416,7 @@ impl JsonValue {
                     }
                     Value::Struct(StructValue::new(items, StructType::new(Arc::new(fields))))
                 }
+                JsonVariant::Variant(v) => Value::Binary(v.into()),
             }
         }
         helper(self.json_variant)
@@ -442,6 +456,7 @@ impl From<JsonValue> for serde_json::Value {
                 JsonVariant::Object(object) => serde_json::Value::Object(
                     object.into_iter().map(|(k, v)| (k, helper(v))).collect(),
                 ),
+                JsonVariant::Variant(v) => serde_json::from_slice(&v).unwrap(),
             }
         }
         helper(v.json_variant)
@@ -496,6 +511,7 @@ pub enum JsonVariantRef<'a> {
     String(&'a str),
     Array(Vec<JsonVariantRef<'a>>),
     Object(BTreeMap<&'a str, JsonVariantRef<'a>>),
+    Variant(&'a [u8]),
 }
 
 impl JsonVariantRef<'_> {
@@ -518,12 +534,19 @@ impl JsonVariantRef<'_> {
                     };
                     JsonNativeType::Array(Box::new(item_type))
                 }
-                JsonVariantRef::Object(object) => JsonNativeType::Object(
-                    object
-                        .iter()
-                        .map(|(k, v)| (k.to_string(), native_type(v)))
-                        .collect(),
-                ),
+                JsonVariantRef::Object(object) => {
+                    if object.is_empty() {
+                        JsonNativeType::Null
+                    } else {
+                        JsonNativeType::Object(
+                            object
+                                .iter()
+                                .map(|(k, v)| (k.to_string(), native_type(v)))
+                                .collect(),
+                        )
+                    }
+                }
+                JsonVariantRef::Variant(_) => JsonNativeType::Variant,
             }
         }
         JsonType::new_json2(native_type(self))
@@ -596,7 +619,14 @@ impl From<JsonVariantRef<'_>> for JsonVariant {
                     .map(|(k, v)| (k.to_string(), v.into()))
                     .collect(),
             ),
+            JsonVariantRef::Variant(v) => Self::Variant(v.to_vec()),
         }
+    }
+}
+
+impl<'a> From<&'a [u8]> for JsonVariantRef<'a> {
+    fn from(value: &'a [u8]) -> Self {
+        Self::Variant(value)
     }
 }
 
@@ -683,6 +713,7 @@ impl<'a> JsonValueRef<'a> {
                         fields: StructType::new(Arc::new(fields)),
                     })
                 }
+                JsonVariantRef::Variant(v) => ValueRef::Binary(v),
             }
         }
         helper(&self.json_variant)
